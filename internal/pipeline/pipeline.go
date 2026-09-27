@@ -35,6 +35,29 @@ type Report struct {
 
 func (r *Report) AddAux(u anthropic.Usage) { r.AuxUsage.Add(u) }
 
+// Changed reports whether the named optimizer modified the request.
+func (r *Report) Changed(name string) bool {
+	for _, s := range r.Steps {
+		if s.Name == name && s.Err == nil && s.Before != s.After {
+			return true
+		}
+	}
+	return false
+}
+
+// CompressionRatio is how many times the shrinking steps reduced the
+// request (>= 1). Steps that grow it slightly, like adding cache markers,
+// are ignored: they change price, not size.
+func (r *Report) CompressionRatio() float64 {
+	ratio := 1.0
+	for _, s := range r.Steps {
+		if s.Err == nil && s.After > 0 && s.After < s.Before {
+			ratio *= float64(s.Before) / float64(s.After)
+		}
+	}
+	return ratio
+}
+
 // Step is the outcome of one optimizer.
 type Step struct {
 	Name          string

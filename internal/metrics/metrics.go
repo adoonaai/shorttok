@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -88,6 +89,7 @@ type Proxy struct {
 	CacheWrite     *Counter
 	AuxInput       *Counter
 	AuxOutput      *Counter
+	Baseline       *Counter
 }
 
 func NewProxy(reg *Registry) *Proxy {
@@ -102,6 +104,7 @@ func NewProxy(reg *Registry) *Proxy {
 		CacheWrite:     reg.Counter("shorttok_cache_write_tokens_total", "Input tokens written to the prompt cache.", ""),
 		AuxInput:       reg.Counter("shorttok_aux_input_tokens_total", "Input tokens spent by optimizers (e.g. summaries).", ""),
 		AuxOutput:      reg.Counter("shorttok_aux_output_tokens_total", "Output tokens spent by optimizers (e.g. summaries).", ""),
+		Baseline:       reg.Counter("shorttok_baseline_input_tokens_total", "Estimated input tokens the requests would have used without the proxy.", ""),
 	}
 }
 
@@ -110,5 +113,21 @@ func (p *Proxy) Request(code int) *Counter {
 }
 
 func (p *Proxy) OptimizerError(name string) *Counter {
-	return p.reg.Counter("shorttok_optimizer_errors_total", "Optimizer failures (the change was rolled back).", `optimizer="`+name+`"`)
+	return p.reg.Counter("shorttok_optimizer_errors_total", "Optimizer failures (the change was rolled back).", `optimizer="`+escape(name)+`"`)
 }
+
+// Cost is spend in micro-USD. kind is one of:
+// baseline (estimated input cost without the proxy), input, output, aux.
+// Savings = baseline - input - aux; output is the same either way.
+func (p *Proxy) Cost(kind, model string) *Counter {
+	return p.reg.Counter("shorttok_cost_microusd_total", "Spend in micro-USD by kind and model.",
+		`kind="`+escape(kind)+`",model="`+escape(model)+`"`)
+}
+
+func (p *Proxy) Unpriced(model string) *Counter {
+	return p.reg.Counter("shorttok_unpriced_requests_total", "Requests for models missing from the pricing table.", `model="`+escape(model)+`"`)
+}
+
+var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+
+func escape(v string) string { return labelEscaper.Replace(v) }

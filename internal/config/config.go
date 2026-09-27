@@ -17,6 +17,7 @@ type Config struct {
 	APIKey       string // optional fallback when clients send no key
 	MaxBodyBytes int64
 	LogLevel     string
+	PricingFile  string
 
 	AutoCache bool
 
@@ -34,6 +35,7 @@ func Load() (Config, error) {
 		APIKey:       e.str("ANTHROPIC_API_KEY", ""),
 		MaxBodyBytes: int64(e.int("SHORTTOK_MAX_BODY_MB", 32)) << 20,
 		LogLevel:     e.str("SHORTTOK_LOG_LEVEL", "info"),
+		PricingFile:  e.str("SHORTTOK_PRICING_FILE", ""),
 
 		AutoCache: e.bool("SHORTTOK_AUTOCACHE", true),
 

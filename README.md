@@ -41,7 +41,12 @@ internal/optimizer/
 internal/proxy/          /v1/messages handler, SSE streaming, usage capture
 internal/metrics/        minimal Prometheus exporter
 internal/tokens/         offline token estimate
+internal/pricing/        USD prices and cost math
+internal/eval/           eval harness: dataset, generator, runner, judge, report
 internal/config/         env config
+cmd/shorttok-eval/       eval CLI
+deploy/                  Prometheus, Grafana provisioning + dashboard, pricing.json
+docker-compose.yml       local observability stack
 ```
 
 ### Design principles
@@ -78,15 +83,48 @@ Adds `cache_control` to the end of the system prompt and to the last message, un
 | `SHORTTOK_HISTORY_MIN_TOKENS` | `2000` | estimated size of the old part |
 | `SHORTTOK_HISTORY_MAX_SUMMARY_TOKENS` | `1024` | |
 | `SHORTTOK_HISTORY_CACHE_SIZE` / `_TTL` | `10000` / `24h` | |
+| `SHORTTOK_PRICING_FILE` | – | JSON prices merged over built-in defaults |
 
-## Metrics
+Send `X-Shorttok-Bypass: 1` to forward a request without optimization (used by the eval harness).
 
-`shorttok_requests_total{code}`, `shorttok_estimated_tokens_{before,after}_total`, `shorttok_{input,output}_tokens_total`, `shorttok_cache_{read,write}_tokens_total`, `shorttok_aux_{input,output}_tokens_total`, `shorttok_optimizer_errors_total{optimizer}`, `shorttok_upstream_errors_total`.
+## Dashboard: "saved $X"
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... make up   # ShortTok :8080, Prometheus :9090, Grafana :3000
+```
+
+Grafana opens straight into the provisioned **ShortTok** dashboard: money saved (USD and %), actual spend, spend on summaries, cache hit ratio, cost per hour with vs without the proxy, tokens, savings by model, status codes and errors.
+
+**How savings are computed.** For each request the proxy knows the exact billed usage and the compression ratio of its shrinking steps. The baseline is billed input × ratio, priced at full input rate if the proxy added the cache breakpoints itself, or with the client's own caching pattern if the client manages caching. Saved = baseline − actual input − summary spend. Output cost is identical in both cases and excluded.
+
+**Prices** live in `deploy/pricing.json` (USD per 1M tokens, longest model-name prefix wins). Add new models from the [official pricing page](https://www.anthropic.com/pricing); requests for models without a price show up as `shorttok_unpriced_requests_total`.
+
+### Metrics
+
+`shorttok_cost_microusd_total{kind,model}` with kind = baseline | input | output | aux, `shorttok_baseline_input_tokens_total`, `shorttok_requests_total{code}`, `shorttok_estimated_tokens_{before,after}_total`, `shorttok_{input,output}_tokens_total`, `shorttok_cache_{read,write}_tokens_total`, `shorttok_aux_{input,output}_tokens_total`, `shorttok_optimizer_errors_total{optimizer}`, `shorttok_unpriced_requests_total{model}`, `shorttok_upstream_errors_total`.
+
+## Eval: does it save money without hurting answers?
+
+`shorttok-eval` sends every conversation through the proxy twice, as a baseline (bypass) and optimized, and compares:
+
+- **cost**, including the summaries the proxy paid for (reported via `X-Shorttok-Aux-Cost-Microusd`);
+- **fact recall**: share of known facts the final answer mentions, deterministic;
+- **LLM judge** score 1–5 of the optimized answer against the baseline answer.
+
+With `-replay` (default) each conversation is replayed turn by turn like a real chat (intermediate turns use `max_tokens: 1`), so prompt caching and incremental summaries behave as in production.
+
+```bash
+make eval-gen                                  # 20 synthetic "needle" conversations
+SHORTTOK_HISTORY_MIN_TOKENS=300 make up        # synthetic chats are short: lower the threshold
+ANTHROPIC_API_KEY=sk-ant-... make eval         # writes eval-report.md
+```
+
+The generator states facts (region, database, budget, deadline, team lead) in the first turns, adds unrelated filler turns, and asks to recall them at the end, so the facts land exactly in the summarized part. It is a smoke test of the mechanics; for real numbers, export conversations from your application logs into the same JSONL format (`id`, `model`, `max_tokens`, `system`, `messages`, optional `expect`).
 
 ## Roadmap
 
-1. **Measure honestly**: exact counts via `/v1/messages/count_tokens`; an eval harness that replays a dataset with and without optimizers and scores answer quality with an LLM judge.
+1. **Measure precisely**: exact counts via `/v1/messages/count_tokens` instead of the byte estimate; judge in both orders to remove position bias; eval in CI on a small fixed dataset.
 2. **More optimizers**: trimming (whitespace, duplicated pasted blocks, huge logs/JSON), tool-result truncation.
 3. **Scale**: Redis summary store, per-key config, rate limits.
-4. **Observability**: docker-compose with Prometheus + Grafana dashboard, latency histograms, OpenTelemetry traces.
+4. **Observability**: latency histograms, OpenTelemetry traces, alerts on optimizer errors.
 5. **Beyond**: OpenAI-compatible endpoint, semantic cache (embeddings + pgvector), model routing.

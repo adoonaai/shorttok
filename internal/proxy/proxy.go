@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,8 +17,13 @@ import (
 	"github.com/andrey/shorttok/internal/anthropic"
 	"github.com/andrey/shorttok/internal/metrics"
 	"github.com/andrey/shorttok/internal/pipeline"
+	"github.com/andrey/shorttok/internal/pricing"
 	"github.com/andrey/shorttok/internal/tokens"
 )
+
+// BypassHeader makes the proxy forward a request without optimizing it.
+// Used by the eval harness to get a baseline through the very same path.
+const BypassHeader = "X-Shorttok-Bypass"
 
 type Handler struct {
 	Client   *anthropic.Client
@@ -25,6 +31,8 @@ type Handler struct {
 	Metrics  *metrics.Proxy
 	Log      *slog.Logger
 	MaxBody  int64
+	Pricing  *pricing.Table // optional: enables cost metrics
+	AuxModel string         // model used by optimizers for side calls
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,18 +54,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		h.Log.Warn("unparseable request, passing through", "err", err)
 	} else {
-		before = tokens.Estimate(&req)
-		rc := &pipeline.Context{Req: &req, Headers: hdr}
-		h.Pipeline.Run(r.Context(), rc)
-		rep = rc.Report
-		if out, err := json.Marshal(rc.Req); err == nil {
-			body = out
-			after = tokens.Estimate(rc.Req)
-		} else {
-			h.Log.Error("cannot encode optimized request, passing through", "err", err)
-			after = before
+		before, after = tokens.Estimate(&req), tokens.Estimate(&req)
+		if !isBypass(r.Header) {
+			rc := &pipeline.Context{Req: &req, Headers: hdr}
+			h.Pipeline.Run(r.Context(), rc)
+			rep = rc.Report
+			if out, err := json.Marshal(rc.Req); err == nil {
+				body = out
+				after = tokens.Estimate(rc.Req)
+			} else {
+				h.Log.Error("cannot encode optimized request, passing through", "err", err)
+				rep = pipeline.Report{AuxUsage: rep.AuxUsage} // original is sent: no savings
+			}
 		}
 	}
+	auxMicro := h.auxCost(rep.AuxUsage)
 
 	resp, err := h.Client.Send(r.Context(), "/v1/messages", body, hdr)
 	if err != nil {
@@ -70,6 +81,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Set("X-Shorttok-Tokens-Before", strconv.Itoa(before))
 	w.Header().Set("X-Shorttok-Tokens-After", strconv.Itoa(after))
+	w.Header().Set("X-Shorttok-Aux-Input-Tokens", strconv.Itoa(rep.AuxUsage.InputTokens))
+	w.Header().Set("X-Shorttok-Aux-Output-Tokens", strconv.Itoa(rep.AuxUsage.OutputTokens))
+	w.Header().Set("X-Shorttok-Aux-Cost-Microusd", strconv.Itoa(auxMicro))
 	w.WriteHeader(resp.StatusCode)
 
 	var usage anthropic.Usage
@@ -90,7 +104,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Log.Warn("response copy interrupted", "err", err)
 	}
 
-	h.record(resp.StatusCode, before, after, usage, rep)
+	h.record(req.Model, resp.StatusCode, before, after, usage, rep, auxMicro)
 	h.Log.Info("request",
 		"model", req.Model, "stream", req.Stream, "status", resp.StatusCode,
 		"est_before", before, "est_after", after,
@@ -100,7 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"duration", time.Since(start))
 }
 
-func (h *Handler) record(code, before, after int, u anthropic.Usage, rep pipeline.Report) {
+func (h *Handler) record(model string, code, before, after int, u anthropic.Usage, rep pipeline.Report, auxMicro int) {
 	m := h.Metrics
 	m.Request(code).Add(1)
 	m.EstBefore.Add(before)
@@ -116,6 +130,53 @@ func (h *Handler) record(code, before, after int, u anthropic.Usage, rep pipelin
 			m.OptimizerError(s.Name).Add(1)
 		}
 	}
+	if auxMicro > 0 {
+		m.Cost("aux", h.AuxModel).Add(auxMicro)
+	}
+
+	billed := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	if billed == 0 || model == "" {
+		return // failed request: nothing was charged
+	}
+	ratio := rep.CompressionRatio()
+	m.Baseline.Add(int(math.Round(float64(billed) * ratio)))
+
+	if h.Pricing == nil {
+		return
+	}
+	p, ok := h.Pricing.Lookup(model)
+	if !ok {
+		m.Unpriced(model).Add(1)
+		return
+	}
+	actual := p.InputMicro(u)
+	var baseline int
+	if rep.Changed("autocache") {
+		// Caching was our doing: without the proxy every token is full price.
+		baseline = p.InputMicro(anthropic.Usage{InputTokens: int(math.Round(float64(billed) * ratio))})
+	} else {
+		// The client's own caching pattern would have been the same: credit compression only.
+		baseline = int(math.Round(float64(actual) * ratio))
+	}
+	m.Cost("baseline", model).Add(baseline)
+	m.Cost("input", model).Add(actual)
+	m.Cost("output", model).Add(p.OutputMicro(u))
+}
+
+func (h *Handler) auxCost(u anthropic.Usage) int {
+	if h.Pricing == nil || u == (anthropic.Usage{}) {
+		return 0
+	}
+	p, ok := h.Pricing.Lookup(h.AuxModel)
+	if !ok {
+		return 0
+	}
+	return p.InputMicro(u) + p.OutputMicro(u)
+}
+
+func isBypass(h http.Header) bool {
+	v := strings.ToLower(h.Get(BypassHeader))
+	return v == "1" || v == "true"
 }
 
 // copySSE copies a server-sent event stream line by line, flushing at every

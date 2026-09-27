@@ -18,6 +18,7 @@ import (
 	"github.com/andrey/shorttok/internal/optimizer/autocache"
 	"github.com/andrey/shorttok/internal/optimizer/history"
 	"github.com/andrey/shorttok/internal/pipeline"
+	"github.com/andrey/shorttok/internal/pricing"
 	"github.com/andrey/shorttok/internal/proxy"
 )
 
@@ -53,6 +54,14 @@ func main() {
 		opts = append(opts, autocache.New())
 	}
 
+	prices := pricing.Default()
+	if cfg.PricingFile != "" {
+		if err := prices.LoadFile(cfg.PricingFile); err != nil {
+			log.Error("cannot load pricing", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	reg := metrics.NewRegistry()
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/messages", &proxy.Handler{
@@ -61,6 +70,8 @@ func main() {
 		Metrics:  metrics.NewProxy(reg),
 		Log:      log,
 		MaxBody:  cfg.MaxBodyBytes,
+		Pricing:  prices,
+		AuxModel: cfg.History.Model,
 	})
 	mux.Handle("GET /metrics", reg)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })

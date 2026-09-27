@@ -5,7 +5,9 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
@@ -14,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/metrics"
-	"github.com/andrey/shorttok/internal/pipeline"
-	"github.com/andrey/shorttok/internal/pricing"
-	"github.com/andrey/shorttok/internal/tokens"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/metrics"
+	"github.com/adoonaai/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/tokens"
 )
 
 // BypassHeader makes the proxy forward a request without optimizing it.
@@ -33,6 +35,11 @@ type Handler struct {
 	MaxBody  int64
 	Pricing  *pricing.Table // optional: enables cost metrics
 	AuxModel string         // model used by optimizers for side calls
+
+	// CountTimeout > 0 enables exact before/after token counts through
+	// count_tokens for requests the pipeline shrank. The counts run alongside
+	// the upstream call; on timeout or error the byte estimate is used.
+	CountTimeout time.Duration
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +77,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	auxMicro := h.auxCost(rep.AuxUsage)
 
+	// Exact counts only matter when the request was shrunk: otherwise
+	// before == after and the API's usage block is already exact.
+	ratio := rep.CompressionRatio()
+	var counted chan exactCount
+	if h.CountTimeout > 0 && ratio > 1 {
+		ctx, cancel := context.WithTimeout(r.Context(), h.CountTimeout)
+		defer cancel()
+		counted = make(chan exactCount, 1)
+		go func() { counted <- h.countExact(ctx, hdr, raw, &req) }()
+	}
+
 	resp, err := h.Client.Send(r.Context(), "/v1/messages", body, hdr)
 	if err != nil {
 		h.Metrics.UpstreamErrors.Add(1)
@@ -78,9 +96,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	exact := false
+	if counted != nil {
+		if c := <-counted; c.err == nil && c.after > 0 {
+			before, after, exact = c.before, c.after, true
+			ratio = float64(before) / float64(after)
+		} else {
+			h.Metrics.CountFallbacks.Add(1)
+			h.Log.Warn("exact token count failed, using estimate", "err", c.err)
+		}
+	}
+
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Set("X-Shorttok-Tokens-Before", strconv.Itoa(before))
 	w.Header().Set("X-Shorttok-Tokens-After", strconv.Itoa(after))
+	w.Header().Set("X-Shorttok-Tokens-Exact", strconv.FormatBool(exact))
 	w.Header().Set("X-Shorttok-Aux-Input-Tokens", strconv.Itoa(rep.AuxUsage.InputTokens))
 	w.Header().Set("X-Shorttok-Aux-Output-Tokens", strconv.Itoa(rep.AuxUsage.OutputTokens))
 	w.Header().Set("X-Shorttok-Aux-Cost-Microusd", strconv.Itoa(auxMicro))
@@ -104,17 +134,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Log.Warn("response copy interrupted", "err", err)
 	}
 
-	h.record(req.Model, resp.StatusCode, before, after, usage, rep, auxMicro)
+	h.record(req.Model, resp.StatusCode, before, after, ratio, usage, rep, auxMicro)
 	h.Log.Info("request",
 		"model", req.Model, "stream", req.Stream, "status", resp.StatusCode,
-		"est_before", before, "est_after", after,
+		"tokens_before", before, "tokens_after", after, "exact", exact,
 		"input", usage.InputTokens, "output", usage.OutputTokens,
 		"cache_read", usage.CacheReadInputTokens, "cache_write", usage.CacheCreationInputTokens,
 		"aux_input", rep.AuxUsage.InputTokens, "aux_output", rep.AuxUsage.OutputTokens,
 		"duration", time.Since(start))
 }
 
-func (h *Handler) record(model string, code, before, after int, u anthropic.Usage, rep pipeline.Report, auxMicro int) {
+// ratio is how many times the request was shrunk: from exact counts when
+// available, otherwise from the pipeline's estimates.
+func (h *Handler) record(model string, code, before, after int, ratio float64, u anthropic.Usage, rep pipeline.Report, auxMicro int) {
 	m := h.Metrics
 	m.Request(code).Add(1)
 	m.EstBefore.Add(before)
@@ -138,7 +170,6 @@ func (h *Handler) record(model string, code, before, after int, u anthropic.Usag
 	if billed == 0 || model == "" {
 		return // failed request: nothing was charged
 	}
-	ratio := rep.CompressionRatio()
 	m.Baseline.Add(int(math.Round(float64(billed) * ratio)))
 
 	if h.Pricing == nil {
@@ -161,6 +192,33 @@ func (h *Handler) record(model string, code, before, after int, u anthropic.Usag
 	m.Cost("baseline", model).Add(baseline)
 	m.Cost("input", model).Add(actual)
 	m.Cost("output", model).Add(p.OutputMicro(u))
+}
+
+type exactCount struct {
+	before, after int
+	err           error
+}
+
+// countExact counts the original request (re-parsed from raw, since the
+// pipeline rewrote req in place) and the optimized one concurrently.
+func (h *Handler) countExact(ctx context.Context, hdr http.Header, raw []byte, optimized *anthropic.Request) exactCount {
+	var orig anthropic.Request
+	if err := json.Unmarshal(raw, &orig); err != nil {
+		return exactCount{err: err}
+	}
+	var (
+		c        exactCount
+		afterErr error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		c.after, afterErr = h.Client.CountTokens(ctx, hdr, optimized)
+	}()
+	c.before, c.err = h.Client.CountTokens(ctx, hdr, &orig)
+	<-done
+	c.err = errors.Join(c.err, afterErr)
+	return c
 }
 
 func (h *Handler) auxCost(u anthropic.Usage) int {

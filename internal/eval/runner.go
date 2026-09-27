@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/pricing"
 )
 
 const bypassHeader = "X-Shorttok-Bypass"

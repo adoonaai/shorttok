@@ -13,7 +13,7 @@ curl -i localhost:8080/v1/messages \
   -d '{"model":"claude-sonnet-5","max_tokens":256,"messages":[{"role":"user","content":"Hi"}]}'
 ```
 
-With the SDK: `Anthropic(base_url="http://localhost:8080")`. Responses carry `X-Shorttok-Tokens-Before` / `X-Shorttok-Tokens-After` headers; aggregate numbers are at `/metrics`.
+With the SDK: `Anthropic(base_url="http://localhost:8080")`. Responses carry `X-Shorttok-Tokens-Before` / `X-Shorttok-Tokens-After` headers (`X-Shorttok-Tokens-Exact: true` when they come from `count_tokens`); aggregate numbers are at `/metrics`.
 
 ## Architecture
 
@@ -83,7 +83,8 @@ Adds `cache_control` to the end of the system prompt and to the last message, un
 | `SHORTTOK_HISTORY_MIN_TOKENS` | `2000` | estimated size of the old part |
 | `SHORTTOK_HISTORY_MAX_SUMMARY_TOKENS` | `1024` | |
 | `SHORTTOK_HISTORY_CACHE_SIZE` / `_TTL` | `10000` / `24h` | |
-| `SHORTTOK_PRICING_FILE` | – | JSON prices merged over built-in defaults |
+| `SHORTTOK_PRICING_FILE` | – | JSON prices merged over built-in defaults; optional per-model `cache_read` price |
+| `SHORTTOK_COUNT_TIMEOUT` | `3s` | exact before/after counts via `/v1/messages/count_tokens` for shrunk requests, run alongside the upstream call; falls back to the byte estimate on error or timeout; `0` disables |
 
 Send `X-Shorttok-Bypass: 1` to forward a request without optimization (used by the eval harness).
 
@@ -101,7 +102,7 @@ Grafana opens straight into the provisioned **ShortTok** dashboard: money saved 
 
 ### Metrics
 
-`shorttok_cost_microusd_total{kind,model}` with kind = baseline | input | output | aux, `shorttok_baseline_input_tokens_total`, `shorttok_requests_total{code}`, `shorttok_estimated_tokens_{before,after}_total`, `shorttok_{input,output}_tokens_total`, `shorttok_cache_{read,write}_tokens_total`, `shorttok_aux_{input,output}_tokens_total`, `shorttok_optimizer_errors_total{optimizer}`, `shorttok_unpriced_requests_total{model}`, `shorttok_upstream_errors_total`.
+`shorttok_cost_microusd_total{kind,model}` with kind = baseline | input | output | aux, `shorttok_baseline_input_tokens_total`, `shorttok_requests_total{code}`, `shorttok_estimated_tokens_{before,after}_total`, `shorttok_{input,output}_tokens_total`, `shorttok_cache_{read,write}_tokens_total`, `shorttok_aux_{input,output}_tokens_total`, `shorttok_optimizer_errors_total{optimizer}`, `shorttok_unpriced_requests_total{model}`, `shorttok_upstream_errors_total`, `shorttok_token_count_fallbacks_total`.
 
 ## Eval: does it save money without hurting answers?
 
@@ -123,7 +124,7 @@ The generator states facts (region, database, budget, deadline, team lead) in th
 
 ## Roadmap
 
-1. **Measure precisely**: exact counts via `/v1/messages/count_tokens` instead of the byte estimate; judge in both orders to remove position bias; eval in CI on a small fixed dataset.
+1. **Measure precisely**: judge in both orders to remove position bias; eval in CI on a small fixed dataset.
 2. **More optimizers**: trimming (whitespace, duplicated pasted blocks, huge logs/JSON), tool-result truncation.
 3. **Scale**: Redis summary store, per-key config, rate limits.
 4. **Observability**: latency histograms, OpenTelemetry traces, alerts on optimizer errors.

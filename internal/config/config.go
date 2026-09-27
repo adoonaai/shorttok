@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/andrey/shorttok/internal/optimizer/history"
+	"github.com/adoonaai/shorttok/internal/optimizer/history"
 )
 
 type Config struct {
@@ -18,6 +18,7 @@ type Config struct {
 	MaxBodyBytes int64
 	LogLevel     string
 	PricingFile  string
+	CountTimeout time.Duration // 0 disables exact token counting
 
 	AutoCache bool
 
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		MaxBodyBytes: int64(e.int("SHORTTOK_MAX_BODY_MB", 32)) << 20,
 		LogLevel:     e.str("SHORTTOK_LOG_LEVEL", "info"),
 		PricingFile:  e.str("SHORTTOK_PRICING_FILE", ""),
+		CountTimeout: e.dur("SHORTTOK_COUNT_TIMEOUT", 3*time.Second),
 
 		AutoCache: e.bool("SHORTTOK_AUTOCACHE", true),
 

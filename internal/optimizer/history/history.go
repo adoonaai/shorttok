@@ -23,9 +23,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/pipeline"
-	"github.com/andrey/shorttok/internal/tokens"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/tokens"
 )
 
 // Bump when the summary prompt changes, to invalidate cached summaries.

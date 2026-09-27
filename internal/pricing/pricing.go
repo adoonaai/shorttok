@@ -13,26 +13,32 @@ import (
 	"os"
 	"strings"
 
-	"github.com/andrey/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/anthropic"
 )
 
-// Multipliers applied to the base input price (5-minute cache TTL).
+// Multipliers applied to the base input price (5-minute cache TTL), unless a
+// model sets its own cache read price.
 const (
 	CacheReadMultiplier  = 0.1
 	CacheWriteMultiplier = 1.25
 )
 
 type Price struct {
-	Input  float64 `json:"input"`  // USD per 1M input tokens
-	Output float64 `json:"output"` // USD per 1M output tokens
+	Input     float64 `json:"input"`                // USD per 1M input tokens
+	Output    float64 `json:"output"`               // USD per 1M output tokens
+	CacheRead float64 `json:"cache_read,omitempty"` // USD per 1M cache hits; 0 = Input * CacheReadMultiplier
 }
 
 // InputMicro is the input-side cost of usage in micro-USD.
 func (p Price) InputMicro(u anthropic.Usage) int {
-	t := float64(u.InputTokens) +
-		CacheReadMultiplier*float64(u.CacheReadInputTokens) +
-		CacheWriteMultiplier*float64(u.CacheCreationInputTokens)
-	return int(math.Round(t * p.Input))
+	cacheRead := p.CacheRead
+	if cacheRead == 0 {
+		cacheRead = CacheReadMultiplier * p.Input
+	}
+	t := p.Input*float64(u.InputTokens) +
+		cacheRead*float64(u.CacheReadInputTokens) +
+		CacheWriteMultiplier*p.Input*float64(u.CacheCreationInputTokens)
+	return int(math.Round(t))
 }
 
 // OutputMicro is the output cost of usage in micro-USD.
@@ -46,6 +52,14 @@ type Table struct{ prices map[string]Price }
 // Check https://www.anthropic.com/pricing and extend via a pricing file.
 func Default() *Table {
 	return &Table{prices: map[string]Price{
+		"claude-fable-5-1":  {Input: 10, Output: 50, CacheRead: 0.25},
+		"claude-fable-5":    {Input: 10, Output: 50},
+		"claude-mythos-5-1": {Input: 10, Output: 50},
+		"claude-opus-5-5":   {Input: 4, Output: 20, CacheRead: 0.20},
+		"claude-opus-5":     {Input: 5, Output: 25},
+		"claude-opus-4-8":   {Input: 5, Output: 25},
+		"claude-sonnet-5":   {Input: 2, Output: 10},
+		"claude-sonnet-4-6": {Input: 3, Output: 15},
 		"claude-haiku-4-5":  {Input: 1, Output: 5},
 		"claude-sonnet-4":   {Input: 3, Output: 15},
 		"claude-opus-4-5":   {Input: 5, Output: 25},

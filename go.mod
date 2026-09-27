@@ -1,3 +1,3 @@
-module github.com/andrey/shorttok
+module github.com/adoonaai/shorttok
 
 go 1.22

@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/andrey/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/anthropic"
 )
 
 type breaker struct{}

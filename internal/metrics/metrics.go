@@ -90,14 +90,15 @@ type Proxy struct {
 	AuxInput       *Counter
 	AuxOutput      *Counter
 	Baseline       *Counter
+	CountFallbacks *Counter
 }
 
 func NewProxy(reg *Registry) *Proxy {
 	return &Proxy{
 		reg:            reg,
 		UpstreamErrors: reg.Counter("shorttok_upstream_errors_total", "Requests that failed to reach the upstream API.", ""),
-		EstBefore:      reg.Counter("shorttok_estimated_tokens_before_total", "Estimated input tokens before optimization.", ""),
-		EstAfter:       reg.Counter("shorttok_estimated_tokens_after_total", "Estimated input tokens after optimization.", ""),
+		EstBefore:      reg.Counter("shorttok_estimated_tokens_before_total", "Input tokens before optimization (exact via count_tokens when available, else estimated).", ""),
+		EstAfter:       reg.Counter("shorttok_estimated_tokens_after_total", "Input tokens after optimization (exact via count_tokens when available, else estimated).", ""),
 		Input:          reg.Counter("shorttok_input_tokens_total", "Uncached input tokens reported by the API.", ""),
 		Output:         reg.Counter("shorttok_output_tokens_total", "Output tokens reported by the API.", ""),
 		CacheRead:      reg.Counter("shorttok_cache_read_tokens_total", "Input tokens served from the prompt cache.", ""),
@@ -105,6 +106,7 @@ func NewProxy(reg *Registry) *Proxy {
 		AuxInput:       reg.Counter("shorttok_aux_input_tokens_total", "Input tokens spent by optimizers (e.g. summaries).", ""),
 		AuxOutput:      reg.Counter("shorttok_aux_output_tokens_total", "Output tokens spent by optimizers (e.g. summaries).", ""),
 		Baseline:       reg.Counter("shorttok_baseline_input_tokens_total", "Estimated input tokens the requests would have used without the proxy.", ""),
+		CountFallbacks: reg.Counter("shorttok_token_count_fallbacks_total", "Shrunk requests where count_tokens failed and the byte estimate was used.", ""),
 	}
 }
 

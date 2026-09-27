@@ -1,11 +1,12 @@
 // Package tokens gives a cheap offline token estimate.
 //
 // It is intentionally rough (~4 bytes of JSON per token) and only used to
-// compare a request before and after optimization. Exact numbers come from
-// the usage block of the API response.
+// compare a request before and after optimization inside the pipeline and as
+// a fallback. Exact numbers come from count_tokens (see proxy.Handler) and
+// from the usage block of the API response.
 package tokens
 
-import "github.com/andrey/shorttok/internal/anthropic"
+import "github.com/adoonaai/shorttok/internal/anthropic"
 
 const bytesPerToken = 4
 

@@ -3,7 +3,7 @@ package pricing
 import (
 	"testing"
 
-	"github.com/andrey/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/anthropic"
 )
 
 func TestLongestPrefixWins(t *testing.T) {
@@ -28,5 +28,28 @@ func TestCacheMultipliers(t *testing.T) {
 	}
 	if got := p.OutputMicro(u); got != 150 {
 		t.Fatalf("output cost %d", got)
+	}
+}
+
+func TestCurrentModels(t *testing.T) {
+	tb := Default()
+	for model, want := range map[string]float64{
+		"claude-fable-5-1": 10,
+		"claude-opus-5-5":  4, // must not fall back to the claude-opus-5 prefix
+		"claude-opus-5":    5,
+		"claude-sonnet-5":  2,
+	} {
+		if p, ok := tb.Lookup(model); !ok || p.Input != want {
+			t.Errorf("%s: %+v, %v", model, p, ok)
+		}
+	}
+}
+
+func TestCustomCacheReadPrice(t *testing.T) {
+	p := Price{Input: 4, Output: 20, CacheRead: 0.2}
+	u := anthropic.Usage{InputTokens: 100, CacheReadInputTokens: 1000}
+	// 4*100 + 0.2*1000 = 600, not the default 4*100 + 0.4*1000 = 800
+	if got := p.InputMicro(u); got != 600 {
+		t.Fatalf("input cost %d", got)
 	}
 }

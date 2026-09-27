@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrey/shorttok/internal/eval"
-	"github.com/andrey/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/eval"
+	"github.com/adoonaai/shorttok/internal/pricing"
 )
 
 func main() {

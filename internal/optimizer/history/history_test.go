@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/pipeline"
 )
 
 type fakeSum struct{ prompts []string }

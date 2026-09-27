@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/andrey/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/anthropic"
 )
 
 // Item is one line of the JSONL dataset.

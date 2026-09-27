@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/andrey/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/anthropic"
 )
 
 const judgeSystem = `You grade an AI assistant's answer against a reference answer written for the same conversation.

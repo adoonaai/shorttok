@@ -7,13 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/metrics"
-	"github.com/andrey/shorttok/internal/pipeline"
-	"github.com/andrey/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/metrics"
+	"github.com/adoonaai/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/pricing"
 )
 
 const sse = "event: message_start\n" +
@@ -123,4 +125,68 @@ func TestCostMetricsAndBypass(t *testing.T) {
 	if d := m.Cost("baseline", "claude-sonnet-4-6").Value() - baseline; d != 3000 {
 		t.Fatalf("bypass baseline must equal actual, got %d", d)
 	}
+}
+
+func TestExactCounts(t *testing.T) {
+	const body = `{"model":"claude-sonnet-5","max_tokens":10,"messages":[` +
+		`{"role":"user","content":"a"},{"role":"assistant","content":"b"},` +
+		`{"role":"user","content":"c"},{"role":"assistant","content":"d"}]}`
+
+	run := func(t *testing.T, countStatus int) (*httptest.ResponseRecorder, *metrics.Proxy) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var m map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&m)
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1/messages/count_tokens" {
+				if _, ok := m["max_tokens"]; ok {
+					t.Error("count_tokens must not receive max_tokens")
+				}
+				var msgs []json.RawMessage
+				_ = json.Unmarshal(m["messages"], &msgs)
+				w.WriteHeader(countStatus)
+				_, _ = io.WriteString(w, `{"input_tokens":`+strconv.Itoa(len(msgs)*300)+`}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"content":[],"usage":{"input_tokens":600,"output_tokens":10}}`)
+		}))
+		t.Cleanup(upstream.Close)
+
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		m := metrics.NewProxy(metrics.NewRegistry())
+		h := &Handler{
+			Client:       &anthropic.Client{BaseURL: upstream.URL, HTTP: upstream.Client()},
+			Pipeline:     pipeline.New(log, shrinker{}),
+			Metrics:      m,
+			Log:          log,
+			MaxBody:      1 << 20,
+			Pricing:      pricing.Default(),
+			CountTimeout: time.Second,
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)))
+		return rec, m
+	}
+
+	t.Run("ok", func(t *testing.T) {
+		rec, m := run(t, http.StatusOK)
+		hd := rec.Header()
+		if hd.Get("X-Shorttok-Tokens-Before") != "1200" || hd.Get("X-Shorttok-Tokens-After") != "600" ||
+			hd.Get("X-Shorttok-Tokens-Exact") != "true" {
+			t.Fatalf("headers: %v", hd)
+		}
+		// 600 billed tokens, exactly 2x shrunk.
+		if got := m.Baseline.Value(); got != 1200 {
+			t.Fatalf("baseline tokens %d", got)
+		}
+	})
+
+	t.Run("fallback", func(t *testing.T) {
+		rec, m := run(t, http.StatusTooManyRequests)
+		if rec.Header().Get("X-Shorttok-Tokens-Exact") != "false" || m.CountFallbacks.Value() != 1 {
+			t.Fatalf("expected estimate fallback, headers %v", rec.Header())
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("count failure must not fail the request: %d", rec.Code)
+		}
+	})
 }

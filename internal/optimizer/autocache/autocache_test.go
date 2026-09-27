@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/pipeline"
 )
 
 func TestAddsBreakpoints(t *testing.T) {

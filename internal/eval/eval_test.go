@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrey/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/pricing"
 )
 
 func TestRecall(t *testing.T) {

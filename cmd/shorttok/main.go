@@ -12,14 +12,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/config"
-	"github.com/andrey/shorttok/internal/metrics"
-	"github.com/andrey/shorttok/internal/optimizer/autocache"
-	"github.com/andrey/shorttok/internal/optimizer/history"
-	"github.com/andrey/shorttok/internal/pipeline"
-	"github.com/andrey/shorttok/internal/pricing"
-	"github.com/andrey/shorttok/internal/proxy"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/config"
+	"github.com/adoonaai/shorttok/internal/metrics"
+	"github.com/adoonaai/shorttok/internal/optimizer/autocache"
+	"github.com/adoonaai/shorttok/internal/optimizer/history"
+	"github.com/adoonaai/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/pricing"
+	"github.com/adoonaai/shorttok/internal/proxy"
 )
 
 func main() {
@@ -72,6 +72,8 @@ func main() {
 		MaxBody:  cfg.MaxBodyBytes,
 		Pricing:  prices,
 		AuxModel: cfg.History.Model,
+
+		CountTimeout: cfg.CountTimeout,
 	})
 	mux.Handle("GET /metrics", reg)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })

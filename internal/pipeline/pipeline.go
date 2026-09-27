@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/tokens"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/tokens"
 )
 
 // Optimizer rewrites a request to make it cheaper.

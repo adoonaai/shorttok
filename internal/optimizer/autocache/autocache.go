@@ -12,8 +12,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/andrey/shorttok/internal/anthropic"
-	"github.com/andrey/shorttok/internal/pipeline"
+	"github.com/adoonaai/shorttok/internal/anthropic"
+	"github.com/adoonaai/shorttok/internal/pipeline"
 )
 
 var ephemeral = json.RawMessage(`{"type":"ephemeral"}`)

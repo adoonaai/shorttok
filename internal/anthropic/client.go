@@ -93,6 +93,48 @@ func (c *Client) Complete(ctx context.Context, hdr http.Header, model, system, p
 	return sb.String(), r.Usage, nil
 }
 
+// countFields are the request fields besides model/system/messages that
+// affect the input token count. Generation settings such as max_tokens,
+// stream or temperature are rejected by count_tokens and are left out.
+var countFields = [...]string{"tools", "tool_choice", "thinking", "mcp_servers"}
+
+// CountTokens returns the exact input token count of r via
+// POST /v1/messages/count_tokens. The endpoint is free but rate limited.
+func (c *Client) CountTokens(ctx context.Context, hdr http.Header, r *Request) (int, error) {
+	m := map[string]any{"model": r.Model, "messages": r.Messages}
+	if len(r.System) > 0 {
+		m["system"] = r.System
+	}
+	for _, k := range countFields {
+		if v, ok := r.Extra[k]; ok {
+			m[k] = v
+		}
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.Send(ctx, "/v1/messages/count_tokens", body, hdr)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("count_tokens %s: %s", resp.Status, clip(data, 300))
+	}
+	var out struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, err
+	}
+	return out.InputTokens, nil
+}
+
 func clip(b []byte, n int) string {
 	if len(b) > n {
 		return string(b[:n]) + "..."
